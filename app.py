@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -15,7 +16,6 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change-me-in-production")
 
 DATA_FILE = "data/schedule.json"
-TOKEN_FILE = "data/google_token.json"
 TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo")
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
@@ -35,7 +35,6 @@ MOTIVATIONAL_LIGHT = [
     "A calm day is a good day to get ahead.",
 ]
 
-DAYS_PT = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
@@ -52,11 +51,79 @@ def save_data(data):
         json.dump(data, f, indent=2)
 
 
-def get_google_creds():
-    if not os.path.exists(TOKEN_FILE):
+# --- Token stored as Render environment variable ---
+
+def get_token_from_env():
+    raw = os.getenv("GOOGLE_TOKEN", "")
+    if not raw:
         return None
-    with open(TOKEN_FILE) as f:
-        token_data = json.load(f)
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def save_token_to_render(creds):
+    """Persist token by updating the Render environment variable via Render API."""
+    render_api_key = os.getenv("RENDER_API_KEY")
+    service_id = os.getenv("RENDER_SERVICE_ID")
+
+    token_data = json.dumps({
+        "token": creds.token,
+        "refresh_token": creds.refresh_token,
+    })
+
+    # Also update in-process so current session works immediately
+    os.environ["GOOGLE_TOKEN"] = token_data
+
+    if not render_api_key or not service_id:
+        # Fallback: save to file if Render API not configured
+        os.makedirs("data", exist_ok=True)
+        with open("data/google_token.json", "w") as f:
+            f.write(token_data)
+        return
+
+    try:
+        # Get current env vars
+        res = requests.get(
+            f"https://api.render.com/v1/services/{service_id}/env-vars",
+            headers={"Authorization": f"Bearer {render_api_key}"},
+        )
+        env_vars = res.json()
+
+        # Build updated list
+        updated = []
+        found = False
+        for ev in env_vars:
+            if ev["key"] == "GOOGLE_TOKEN":
+                updated.append({"key": "GOOGLE_TOKEN", "value": token_data})
+                found = True
+            else:
+                updated.append({"key": ev["key"], "value": ev["value"]})
+        if not found:
+            updated.append({"key": "GOOGLE_TOKEN", "value": token_data})
+
+        requests.put(
+            f"https://api.render.com/v1/services/{service_id}/env-vars",
+            headers={"Authorization": f"Bearer {render_api_key}"},
+            json=updated,
+        )
+        print("Token saved to Render env vars.")
+    except Exception as e:
+        print(f"Could not save token to Render: {e}")
+
+
+def get_google_creds():
+    token_data = get_token_from_env()
+
+    # Fallback to file
+    if not token_data and os.path.exists("data/google_token.json"):
+        with open("data/google_token.json") as f:
+            token_data = json.load(f)
+
+    if not token_data:
+        return None
+
     creds = Credentials(
         token=token_data.get("token"),
         refresh_token=token_data.get("refresh_token"),
@@ -67,23 +134,14 @@ def get_google_creds():
     )
     if creds.expired and creds.refresh_token:
         creds.refresh(GoogleRequest())
-        save_token(creds)
+        save_token_to_render(creds)
     return creds
-
-
-def save_token(creds):
-    os.makedirs("data", exist_ok=True)
-    with open(TOKEN_FILE, "w") as f:
-        json.dump({
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-        }, f)
 
 
 def get_today_events():
     creds = get_google_creds()
     if not creds:
-        return [], []
+        return [], {}
 
     data = load_data()
     selected = data.get("selected_calendars", [])
@@ -224,7 +282,7 @@ def index():
         except Exception:
             pass
     return render_template("index.html", data=data, calendars=calendars,
-                           connected=bool(creds))
+                           connected=bool(creds) and bool(calendars))
 
 
 @app.route("/save-settings", methods=["POST"])
@@ -245,14 +303,14 @@ def auth_google():
             "web": {
                 "client_id": os.getenv("GOOGLE_CLIENT_ID"),
                 "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "redirect_uris": [os.getenv("REDIRECT_URI", "http://localhost:5000/auth/callback")],
+                "redirect_uris": [os.getenv("REDIRECT_URI")],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
         },
         scopes=SCOPES,
     )
-    flow.redirect_uri = os.getenv("REDIRECT_URI", "http://localhost:5000/auth/callback")
+    flow.redirect_uri = os.getenv("REDIRECT_URI")
     auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
     session["oauth_state"] = state
     return redirect(auth_url)
@@ -265,7 +323,7 @@ def auth_callback():
             "web": {
                 "client_id": os.getenv("GOOGLE_CLIENT_ID"),
                 "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "redirect_uris": [os.getenv("REDIRECT_URI", "http://localhost:5000/auth/callback")],
+                "redirect_uris": [os.getenv("REDIRECT_URI")],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
@@ -273,9 +331,9 @@ def auth_callback():
         scopes=SCOPES,
         state=session.get("oauth_state"),
     )
-    flow.redirect_uri = os.getenv("REDIRECT_URI", "http://localhost:5000/auth/callback")
+    flow.redirect_uri = os.getenv("REDIRECT_URI")
     flow.fetch_token(authorization_response=request.url)
-    save_token(flow.credentials)
+    save_token_to_render(flow.credentials)
     return redirect(url_for("index"))
 
 
