@@ -347,6 +347,14 @@ def send_now():
     send_whatsapp()
     return jsonify({"status": "sent"})
 
+@app.route("/debug-token")
+def debug_token():
+    token_data = get_token_from_env()
+    if not token_data and os.path.exists("data/google_token.json"):
+        with open("data/google_token.json") as f:
+            token_data = json.load(f)
+    return jsonify(token_data or {"error": "no token found"})
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
