@@ -355,6 +355,17 @@ def debug_token():
             token_data = json.load(f)
     return jsonify(token_data or {"error": "no token found"})
 
+@app.route("/debug-render")
+def debug_render():
+    import requests
+    api_key = os.getenv("RENDER_API_KEY")
+    service_id = os.getenv("RENDER_SERVICE_ID")
+    res = requests.get(
+        f"https://api.render.com/v1/services/{service_id}/env-vars",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    return jsonify({"status": res.status_code, "body": res.json()})
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
