@@ -15,7 +15,6 @@ from google.auth.transport.requests import Request as GoogleRequest
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change-me-in-production")
 
-DATA_FILE = "data/schedule.json"
 TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo")
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
@@ -25,19 +24,16 @@ MORNING_OPENERS_BUSY = [
     "Lots on today. You've got this.",
     "A packed day — prioritise and move.",
 ]
-
 MORNING_OPENERS_LIGHT = [
     "Lighter day today. Good time for deep work.",
     "Some breathing room today — use it well.",
     "Not much on the calendar. Good day to get ahead.",
 ]
-
 EVENING_OPENERS_BUSY = [
     "Tomorrow's looking full — good to be prepared.",
     "Heads up: busy day ahead tomorrow.",
     "Tomorrow has a lot going on. Plan accordingly.",
 ]
-
 EVENING_OPENERS_LIGHT = [
     "Tomorrow looks calm. Enjoy the evening.",
     "Light schedule tomorrow — rest up tonight.",
@@ -47,23 +43,60 @@ EVENING_OPENERS_LIGHT = [
 DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
+# --- Settings stored in Render env vars ---
+
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {
-            "morning_time": "07:00",
-            "evening_time": "18:00",
-            "phone": "",
-            "selected_calendars": []
+    return {
+        "morning_time": os.getenv("MORNING_TIME", "07:00"),
+        "evening_time": os.getenv("EVENING_TIME", "18:00"),
+        "phone": os.getenv("WHATSAPP_PHONE", ""),
+        "selected_calendars": json.loads(os.getenv("SELECTED_CALENDARS", "[]")),
+    }
+
+
+def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
+    """Save all settings to Render environment variables."""
+    os.environ["MORNING_TIME"] = morning_time
+    os.environ["EVENING_TIME"] = evening_time
+    os.environ["WHATSAPP_PHONE"] = phone
+    os.environ["SELECTED_CALENDARS"] = json.dumps(selected_calendars)
+
+    render_api_key = os.getenv("RENDER_API_KEY")
+    service_id = os.getenv("RENDER_SERVICE_ID")
+    if not render_api_key or not service_id:
+        return
+
+    try:
+        res = requests.get(
+            f"https://api.render.com/v1/services/{service_id}/env-vars",
+            headers={"Authorization": f"Bearer {render_api_key}"},
+        )
+        env_vars = res.json()
+        updates = {
+            "MORNING_TIME": morning_time,
+            "EVENING_TIME": evening_time,
+            "WHATSAPP_PHONE": phone,
+            "SELECTED_CALENDARS": json.dumps(selected_calendars),
         }
-    with open(DATA_FILE) as f:
-        return json.load(f)
+        updated = []
+        for ev in env_vars:
+            if ev["key"] in updates:
+                updated.append({"key": ev["key"], "value": updates.pop(ev["key"])})
+            else:
+                updated.append({"key": ev["key"], "value": ev["value"]})
+        for key, value in updates.items():
+            updated.append({"key": key, "value": value})
+        requests.put(
+            f"https://api.render.com/v1/services/{service_id}/env-vars",
+            headers={"Authorization": f"Bearer {render_api_key}"},
+            json=updated,
+        )
+        print(f"Settings saved to Render: morning={morning_time}, evening={evening_time}")
+    except Exception as e:
+        print(f"Could not save settings to Render: {e}")
 
 
-def save_data(data):
-    os.makedirs("data", exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
+# --- Google token ---
 
 def get_token_from_env():
     raw = os.getenv("GOOGLE_TOKEN", "")
@@ -84,11 +117,7 @@ def save_token_to_render(creds):
 
     render_api_key = os.getenv("RENDER_API_KEY")
     service_id = os.getenv("RENDER_SERVICE_ID")
-
     if not render_api_key or not service_id:
-        os.makedirs("data", exist_ok=True)
-        with open("data/google_token.json", "w") as f:
-            f.write(token_data)
         return
 
     try:
@@ -119,9 +148,6 @@ def save_token_to_render(creds):
 
 def get_google_creds():
     token_data = get_token_from_env()
-    if not token_data and os.path.exists("data/google_token.json"):
-        with open("data/google_token.json") as f:
-            token_data = json.load(f)
     if not token_data:
         return None
     creds = Credentials(
@@ -137,6 +163,8 @@ def get_google_creds():
         save_token_to_render(creds)
     return creds
 
+
+# --- Calendar ---
 
 def get_events_for_day(target_date):
     creds = get_google_creds()
@@ -202,25 +230,17 @@ def build_morning_message():
     today = datetime.now(tz).date()
     day_label = DAYS_EN[today.weekday()]
     date_label = today.strftime("%d/%m")
-
     events, _ = get_events_for_day(today)
     timed = [e for e in events if not e["all_day"]]
     busy = len(timed) >= 4
     opener = random.choice(MORNING_OPENERS_BUSY if busy else MORNING_OPENERS_LIGHT)
-
     lines = [
         f"☀️ *Good morning! {day_label}, {date_label}*",
-        f"_{opener}_",
-        "",
+        f"_{opener}_", "",
         "*Today's agenda:*",
     ]
-
     event_lines = format_event_list(events)
-    if event_lines:
-        lines += event_lines
-    else:
-        lines.append("_Nothing scheduled — free day!_")
-
+    lines += event_lines if event_lines else ["_Nothing scheduled — free day!_"]
     return "\n".join(lines)
 
 
@@ -229,31 +249,22 @@ def build_evening_message():
     tomorrow = datetime.now(tz).date() + timedelta(days=1)
     day_label = DAYS_EN[tomorrow.weekday()]
     date_label = tomorrow.strftime("%d/%m")
-
     events, _ = get_events_for_day(tomorrow)
     timed = [e for e in events if not e["all_day"]]
     busy = len(timed) >= 4
     opener = random.choice(EVENING_OPENERS_BUSY if busy else EVENING_OPENERS_LIGHT)
-
     lines = [
         f"🌙 *Tomorrow preview — {day_label}, {date_label}*",
-        f"_{opener}_",
-        "",
+        f"_{opener}_", "",
         "*Tomorrow's agenda:*",
     ]
-
     event_lines = format_event_list(events)
-    if event_lines:
-        lines += event_lines
-    else:
-        lines.append("_Nothing scheduled yet._")
-
+    lines += event_lines if event_lines else ["_Nothing scheduled yet._"]
     return "\n".join(lines)
 
 
 def send_whatsapp(message):
-    data = load_data()
-    phone = data.get("phone", "").strip()
+    phone = os.getenv("WHATSAPP_PHONE", "").strip()
     if not phone:
         print("No phone set.")
         return
@@ -266,9 +277,7 @@ def send_whatsapp(message):
     client = Client(sid, token)
     try:
         msg = client.messages.create(
-            body=message,
-            from_=from_num,
-            to=f"whatsapp:{phone}",
+            body=message, from_=from_num, to=f"whatsapp:{phone}",
         )
         print(f"Sent: {msg.sid}")
     except Exception as e:
@@ -288,17 +297,15 @@ scheduler.start()
 
 
 def reschedule():
-    data = load_data()
     tz = pytz.timezone(TIMEZONE)
+    morning_time = os.getenv("MORNING_TIME", "07:00")
+    evening_time = os.getenv("EVENING_TIME", "18:00")
     scheduler.remove_all_jobs()
-
-    mh, mm = map(int, data.get("morning_time", "07:00").split(":"))
+    mh, mm = map(int, morning_time.split(":"))
     scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
-
-    eh, em = map(int, data.get("evening_time", "18:00").split(":"))
+    eh, em = map(int, evening_time.split(":"))
     scheduler.add_job(send_evening, "cron", hour=eh, minute=em, timezone=tz, id="evening")
-
-    print(f"Scheduled morning {data.get('morning_time')} and evening {data.get('evening_time')} {TIMEZONE}")
+    print(f"Scheduled morning {morning_time} and evening {evening_time} {TIMEZONE}")
 
 
 reschedule()
@@ -322,12 +329,11 @@ def index():
 
 @app.route("/save-settings", methods=["POST"])
 def save_settings():
-    data = load_data()
-    data["phone"] = request.form.get("phone", "").strip()
-    data["morning_time"] = request.form.get("morning_time", "07:00").strip()
-    data["evening_time"] = request.form.get("evening_time", "18:00").strip()
-    data["selected_calendars"] = request.form.getlist("calendars")
-    save_data(data)
+    morning_time = request.form.get("morning_time", "07:00").strip()
+    evening_time = request.form.get("evening_time", "18:00").strip()
+    phone = request.form.get("phone", "").strip()
+    selected_calendars = request.form.getlist("calendars")
+    save_data_to_render(morning_time, evening_time, phone, selected_calendars)
     reschedule()
     return redirect(url_for("index"))
 
