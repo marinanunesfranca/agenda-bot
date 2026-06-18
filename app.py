@@ -19,20 +19,29 @@ DATA_FILE = "data/schedule.json"
 TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo")
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
-MOTIVATIONAL_BUSY = [
-    "Looks like a full one — let's make every block count.",
-    "Busy day ahead. Prioritise, focus, deliver.",
-    "A packed schedule means you're in demand. Own it.",
-    "Full calendar today — energy up, distractions down.",
-    "Lots on the plate. You've handled days like this before.",
+MORNING_OPENERS_BUSY = [
+    "Busy one today — let's make it count.",
+    "Full schedule ahead. Stay focused.",
+    "Lots on today. You've got this.",
+    "A packed day — prioritise and move.",
 ]
 
-MOTIVATIONAL_LIGHT = [
-    "A lighter day — use the space to think ahead.",
-    "Some breathing room today. Use it well.",
-    "Fewer meetings means more deep work. Make it count.",
-    "Open blocks are opportunities in disguise.",
-    "A calm day is a good day to get ahead.",
+MORNING_OPENERS_LIGHT = [
+    "Lighter day today. Good time for deep work.",
+    "Some breathing room today — use it well.",
+    "Not much on the calendar. Good day to get ahead.",
+]
+
+EVENING_OPENERS_BUSY = [
+    "Tomorrow's looking full — good to be prepared.",
+    "Heads up: busy day ahead tomorrow.",
+    "Tomorrow has a lot going on. Plan accordingly.",
+]
+
+EVENING_OPENERS_LIGHT = [
+    "Tomorrow looks calm. Enjoy the evening.",
+    "Light schedule tomorrow — rest up tonight.",
+    "Not much on tomorrow. Good night ahead.",
 ]
 
 DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -40,7 +49,12 @@ DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"send_time": "07:00", "phone": "", "selected_calendars": []}
+        return {
+            "morning_time": "07:00",
+            "evening_time": "18:00",
+            "phone": "",
+            "selected_calendars": []
+        }
     with open(DATA_FILE) as f:
         return json.load(f)
 
@@ -50,8 +64,6 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-
-# --- Token stored as Render environment variable ---
 
 def get_token_from_env():
     raw = os.getenv("GOOGLE_TOKEN", "")
@@ -64,34 +76,27 @@ def get_token_from_env():
 
 
 def save_token_to_render(creds):
-    """Persist token by updating the Render environment variable via Render API."""
-    render_api_key = os.getenv("RENDER_API_KEY")
-    service_id = os.getenv("RENDER_SERVICE_ID")
-
     token_data = json.dumps({
         "token": creds.token,
         "refresh_token": creds.refresh_token,
     })
-
-    # Also update in-process so current session works immediately
     os.environ["GOOGLE_TOKEN"] = token_data
 
+    render_api_key = os.getenv("RENDER_API_KEY")
+    service_id = os.getenv("RENDER_SERVICE_ID")
+
     if not render_api_key or not service_id:
-        # Fallback: save to file if Render API not configured
         os.makedirs("data", exist_ok=True)
         with open("data/google_token.json", "w") as f:
             f.write(token_data)
         return
 
     try:
-        # Get current env vars
         res = requests.get(
             f"https://api.render.com/v1/services/{service_id}/env-vars",
             headers={"Authorization": f"Bearer {render_api_key}"},
         )
         env_vars = res.json()
-
-        # Build updated list
         updated = []
         found = False
         for ev in env_vars:
@@ -102,28 +107,23 @@ def save_token_to_render(creds):
                 updated.append({"key": ev["key"], "value": ev["value"]})
         if not found:
             updated.append({"key": "GOOGLE_TOKEN", "value": token_data})
-
         requests.put(
             f"https://api.render.com/v1/services/{service_id}/env-vars",
             headers={"Authorization": f"Bearer {render_api_key}"},
             json=updated,
         )
-        print("Token saved to Render env vars.")
+        print("Token saved to Render.")
     except Exception as e:
         print(f"Could not save token to Render: {e}")
 
 
 def get_google_creds():
     token_data = get_token_from_env()
-
-    # Fallback to file
     if not token_data and os.path.exists("data/google_token.json"):
         with open("data/google_token.json") as f:
             token_data = json.load(f)
-
     if not token_data:
         return None
-
     creds = Credentials(
         token=token_data.get("token"),
         refresh_token=token_data.get("refresh_token"),
@@ -138,7 +138,7 @@ def get_google_creds():
     return creds
 
 
-def get_today_events():
+def get_events_for_day(target_date):
     creds = get_google_creds()
     if not creds:
         return [], {}
@@ -146,16 +146,14 @@ def get_today_events():
     data = load_data()
     selected = data.get("selected_calendars", [])
     tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = tz.localize(datetime.combine(target_date, datetime.min.time()))
     end = start + timedelta(days=1)
 
     service = build("calendar", "v3", credentials=creds)
-    all_events = []
-
     cal_list = service.calendarList().list().execute()
     calendars = {c["id"]: c["summary"] for c in cal_list.get("items", [])}
 
+    all_events = []
     for cal_id in selected:
         if cal_id not in calendars:
             continue
@@ -167,12 +165,10 @@ def get_today_events():
             orderBy="startTime",
         ).execute()
         for ev in result.get("items", []):
-            start_raw = ev["start"].get("dateTime", ev["start"].get("date"))
-            end_raw = ev["end"].get("dateTime", ev["end"].get("date"))
             all_day = "dateTime" not in ev["start"]
             if not all_day:
-                dt_start = datetime.fromisoformat(start_raw).astimezone(tz)
-                dt_end = datetime.fromisoformat(end_raw).astimezone(tz)
+                dt_start = datetime.fromisoformat(ev["start"]["dateTime"]).astimezone(tz)
+                dt_end = datetime.fromisoformat(ev["end"]["dateTime"]).astimezone(tz)
                 time_label = f"{dt_start.strftime('%H:%M')}–{dt_end.strftime('%H:%M')}"
                 sort_key = dt_start
             else:
@@ -189,61 +185,88 @@ def get_today_events():
     return all_events, calendars
 
 
-def build_message():
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
-    day_label = DAYS_EN[now.weekday()]
-    date_label = now.strftime("%d/%m")
-
-    events, _ = get_today_events()
+def format_event_list(events):
+    lines = []
     timed = [e for e in events if not e["all_day"]]
     allday = [e for e in events if e["all_day"]]
-
-    busy = len(timed) >= 4
-    quote = random.choice(MOTIVATIONAL_BUSY if busy else MOTIVATIONAL_LIGHT)
-    busy_word = "a busy" if busy else "a lighter"
-
-    lines = [
-        f"Hey! Let's start your *{day_label}* ({date_label}) with high energy — looks like {busy_word} day. {quote}",
-        "",
-    ]
-
     if allday:
         for e in allday:
-            lines.append(f"📌 _{e['summary']}_")
-        lines.append("")
+            lines.append(f"📌 {e['summary']} _(all day)_")
+    for e in timed:
+        lines.append(f"• *{e['time']}* — {e['summary']}")
+    return lines
 
-    if timed:
-        for e in timed:
-            lines.append(f"*{e['time']}* — {e['summary']}")
+
+def build_morning_message():
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).date()
+    day_label = DAYS_EN[today.weekday()]
+    date_label = today.strftime("%d/%m")
+
+    events, _ = get_events_for_day(today)
+    timed = [e for e in events if not e["all_day"]]
+    busy = len(timed) >= 4
+    opener = random.choice(MORNING_OPENERS_BUSY if busy else MORNING_OPENERS_LIGHT)
+
+    lines = [
+        f"☀️ *Good morning! {day_label}, {date_label}*",
+        f"_{opener}_",
+        "",
+        "*Today's agenda:*",
+    ]
+
+    event_lines = format_event_list(events)
+    if event_lines:
+        lines += event_lines
     else:
-        lines.append("_No timed events today. Enjoy the open space!_")
-
-    lines.append("")
-    lines.append("You've got this 💪")
+        lines.append("_Nothing scheduled — free day!_")
 
     return "\n".join(lines)
 
 
-def send_whatsapp():
+def build_evening_message():
+    tz = pytz.timezone(TIMEZONE)
+    tomorrow = datetime.now(tz).date() + timedelta(days=1)
+    day_label = DAYS_EN[tomorrow.weekday()]
+    date_label = tomorrow.strftime("%d/%m")
+
+    events, _ = get_events_for_day(tomorrow)
+    timed = [e for e in events if not e["all_day"]]
+    busy = len(timed) >= 4
+    opener = random.choice(EVENING_OPENERS_BUSY if busy else EVENING_OPENERS_LIGHT)
+
+    lines = [
+        f"🌙 *Tomorrow preview — {day_label}, {date_label}*",
+        f"_{opener}_",
+        "",
+        "*Tomorrow's agenda:*",
+    ]
+
+    event_lines = format_event_list(events)
+    if event_lines:
+        lines += event_lines
+    else:
+        lines.append("_Nothing scheduled yet._")
+
+    return "\n".join(lines)
+
+
+def send_whatsapp(message):
     data = load_data()
     phone = data.get("phone", "").strip()
     if not phone:
         print("No phone set.")
         return
-
     sid = os.getenv("TWILIO_ACCOUNT_SID")
     token = os.getenv("TWILIO_AUTH_TOKEN")
     from_num = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-
     if not sid or not token:
         print("Twilio credentials missing.")
         return
-
     client = Client(sid, token)
     try:
         msg = client.messages.create(
-            body=build_message(),
+            body=message,
             from_=from_num,
             to=f"whatsapp:{phone}",
         )
@@ -252,21 +275,33 @@ def send_whatsapp():
         print(f"Twilio error: {e}")
 
 
+def send_morning():
+    send_whatsapp(build_morning_message())
+
+
+def send_evening():
+    send_whatsapp(build_evening_message())
+
+
 scheduler = BackgroundScheduler()
 scheduler.start()
 
 
-def reschedule(send_time):
+def reschedule():
+    data = load_data()
     tz = pytz.timezone(TIMEZONE)
-    hour, minute = map(int, send_time.split(":"))
     scheduler.remove_all_jobs()
-    scheduler.add_job(send_whatsapp, "cron", hour=hour, minute=minute,
-                      timezone=tz, id="daily")
-    print(f"Scheduled at {send_time} {TIMEZONE}")
+
+    mh, mm = map(int, data.get("morning_time", "07:00").split(":"))
+    scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
+
+    eh, em = map(int, data.get("evening_time", "18:00").split(":"))
+    scheduler.add_job(send_evening, "cron", hour=eh, minute=em, timezone=tz, id="evening")
+
+    print(f"Scheduled morning {data.get('morning_time')} and evening {data.get('evening_time')} {TIMEZONE}")
 
 
-data0 = load_data()
-reschedule(data0.get("send_time", "07:00"))
+reschedule()
 
 
 @app.route("/")
@@ -289,25 +324,24 @@ def index():
 def save_settings():
     data = load_data()
     data["phone"] = request.form.get("phone", "").strip()
-    data["send_time"] = request.form.get("send_time", "07:00").strip()
+    data["morning_time"] = request.form.get("morning_time", "07:00").strip()
+    data["evening_time"] = request.form.get("evening_time", "18:00").strip()
     data["selected_calendars"] = request.form.getlist("calendars")
     save_data(data)
-    reschedule(data["send_time"])
+    reschedule()
     return redirect(url_for("index"))
 
 
 @app.route("/auth/google")
 def auth_google():
     flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "redirect_uris": [os.getenv("REDIRECT_URI")],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
+        {"web": {
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "redirect_uris": [os.getenv("REDIRECT_URI")],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }},
         scopes=SCOPES,
     )
     flow.redirect_uri = os.getenv("REDIRECT_URI")
@@ -319,15 +353,13 @@ def auth_google():
 @app.route("/auth/callback")
 def auth_callback():
     flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "redirect_uris": [os.getenv("REDIRECT_URI")],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
+        {"web": {
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "redirect_uris": [os.getenv("REDIRECT_URI")],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }},
         scopes=SCOPES,
         state=session.get("oauth_state"),
     )
@@ -337,34 +369,26 @@ def auth_callback():
     return redirect(url_for("index"))
 
 
-@app.route("/preview")
-def preview():
-    return jsonify({"message": build_message()})
+@app.route("/preview/morning")
+def preview_morning():
+    return jsonify({"message": build_morning_message()})
 
 
-@app.route("/send-now", methods=["POST"])
-def send_now():
-    send_whatsapp()
+@app.route("/preview/evening")
+def preview_evening():
+    return jsonify({"message": build_evening_message()})
+
+
+@app.route("/send-now/morning", methods=["POST"])
+def send_now_morning():
+    send_morning()
     return jsonify({"status": "sent"})
 
-@app.route("/debug-token")
-def debug_token():
-    token_data = get_token_from_env()
-    if not token_data and os.path.exists("data/google_token.json"):
-        with open("data/google_token.json") as f:
-            token_data = json.load(f)
-    return jsonify(token_data or {"error": "no token found"})
 
-@app.route("/debug-render")
-def debug_render():
-    import requests
-    api_key = os.getenv("RENDER_API_KEY")
-    service_id = os.getenv("RENDER_SERVICE_ID")
-    res = requests.get(
-        f"https://api.render.com/v1/services/{service_id}/env-vars",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    return jsonify({"status": res.status_code, "body": res.json()})
+@app.route("/send-now/evening", methods=["POST"])
+def send_now_evening():
+    send_evening()
+    return jsonify({"status": "sent"})
 
 
 if __name__ == "__main__":
