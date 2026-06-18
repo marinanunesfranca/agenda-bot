@@ -4,7 +4,6 @@ import random
 import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
-from apscheduler.schedulers.background import BackgroundScheduler
 from twilio.rest import Client
 import pytz
 from google.oauth2.credentials import Credentials
@@ -307,20 +306,16 @@ def send_evening():
     send_whatsapp(build_evening_message())
 
 
-scheduler = BackgroundScheduler()
-scheduler.start()
+@app.route("/cron/morning")
+def cron_morning():
+    send_morning()
+    return "ok"
 
 
-def reschedule(morning_time=None, evening_time=None):
-    tz = pytz.timezone(TIMEZONE)
-    morning_time = morning_time or os.getenv("MORNING_TIME", "07:00")
-    evening_time = evening_time or os.getenv("EVENING_TIME", "18:00")
-    scheduler.remove_all_jobs()
-    mh, mm = map(int, morning_time.split(":"))
-    scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
-    eh, em = map(int, evening_time.split(":"))
-    scheduler.add_job(send_evening, "cron", hour=eh, minute=em, timezone=tz, id="evening")
-    print(f"Scheduled morning {morning_time} and evening {evening_time} {TIMEZONE}")
+@app.route("/cron/evening")
+def cron_evening():
+    send_evening()
+    return "ok"
 
 
 reschedule()
@@ -349,7 +344,6 @@ def save_settings():
     phone = request.form.get("phone", "").strip()
     selected_calendars = request.form.getlist("calendars")
     save_data_to_render(morning_time, evening_time, phone, selected_calendars)
-    reschedule(morning_time, evening_time)
     return redirect(url_for("index"))
 
 
