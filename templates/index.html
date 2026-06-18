@@ -83,9 +83,16 @@
         <label>WhatsApp number (with country code)</label>
         <input type="tel" name="phone" placeholder="+55 11 99999-9999" value="{{ data.phone }}">
 
-        <div style="margin-top:1rem;padding:10px 14px;background:#f9f9f9;border:1px solid #eee;border-radius:8px;font-size:13px;color:#666;line-height:1.6">
-          ☀️ Morning send: <strong>{{ data.morning_time }}</strong> &nbsp;·&nbsp; 🌙 Evening send: <strong>{{ data.evening_time }}</strong><br>
-          <span style="font-size:12px">To change send times, update <code>MORNING_TIME</code> and <code>EVENING_TIME</code> in Render environment variables.</span>
+        <label style="margin-top:1rem">Send times</label>
+        <div class="time-row">
+          <div>
+            <label style="margin-top:0;font-size:12px;color:#888">☀️ Morning (today)</label>
+            <input type="time" name="morning_time" value="{{ data.morning_time or '07:00' }}">
+          </div>
+          <div>
+            <label style="margin-top:0;font-size:12px;color:#888">🌙 Evening (tomorrow preview)</label>
+            <input type="time" name="evening_time" value="{{ data.evening_time or '18:00' }}">
+          </div>
         </div>
 
         <div class="btn-row">
