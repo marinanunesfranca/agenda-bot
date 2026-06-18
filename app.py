@@ -4,7 +4,8 @@ import random
 import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
-from twilio.rest import Client
+from apscheduler.schedulers.background import BackgroundScheduler
+
 import pytz
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -46,8 +47,8 @@ DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "
 
 def load_data():
     return {
-        "morning_time": os.getenv("MORNING_TIME", "07:00"),
-        "evening_time": os.getenv("EVENING_TIME", "18:00"),
+        "morning_time": os.getenv("MORNING_TIME", ""),
+        "evening_time": os.getenv("EVENING_TIME", ""),
         "phone": os.getenv("WHATSAPP_PHONE", ""),
         "selected_calendars": json.loads(os.getenv("SELECTED_CALENDARS", "[]")),
     }
@@ -318,6 +319,28 @@ def cron_evening():
     return "ok"
 
 
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+def reschedule(morning_time=None, evening_time=None):
+    tz = pytz.timezone(TIMEZONE)
+    morning_time = morning_time or os.getenv("MORNING_TIME", "")
+    evening_time = evening_time or os.getenv("EVENING_TIME", "")
+    scheduler.remove_all_jobs()
+    if morning_time:
+        mh, mm = map(int, morning_time.split(":"))
+        scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
+        print(f"Scheduled morning {morning_time} {TIMEZONE}")
+    if evening_time:
+        eh, em = map(int, evening_time.split(":"))
+        scheduler.add_job(send_evening, "cron", hour=eh, minute=em, timezone=tz, id="evening")
+        print(f"Scheduled evening {evening_time} {TIMEZONE}")
+
+
+reschedule()
+
+
 @app.route("/")
 def index():
     data = load_data()
@@ -341,6 +364,7 @@ def save_settings():
     phone = request.form.get("phone", "").strip()
     selected_calendars = request.form.getlist("calendars")
     save_data_to_render(morning_time, evening_time, phone, selected_calendars)
+    reschedule(morning_time, evening_time)
     return redirect(url_for("index"))
 
 
