@@ -2,8 +2,8 @@ name: Daily Agenda Messages
 
 on:
   schedule:
-    - cron: '45 18 * * *'   # 15:45 Sao Paulo (UTC-3)
-    - cron: '0 19 * * *'    # 16:00 Sao Paulo (UTC-3)
+    - cron: '0 9 * * *'    # 06:00 Sao Paulo (UTC-3)
+    - cron: '0 22 * * *'   # 19:00 Sao Paulo (UTC-3)
   workflow_dispatch:
     inputs:
       message_type:
@@ -17,14 +17,14 @@ on:
 
 jobs:
   send-morning:
-    if: github.event.schedule == '45 18 * * *' || github.event.inputs.message_type == 'morning'
+    if: github.event.schedule == '0 9 * * *' || github.event.inputs.message_type == 'morning'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger morning message
         run: curl -X GET https://agenda-bot-susg.onrender.com/cron/morning
 
   send-evening:
-    if: github.event.schedule == '0 19 * * *' || github.event.inputs.message_type == 'evening'
+    if: github.event.schedule == '0 22 * * *' || github.event.inputs.message_type == 'evening'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger evening message
