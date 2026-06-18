@@ -1,11 +1,11 @@
 # Agenda Bot 📅
 
-A personal automation that sends you two daily WhatsApp messages pulled from your Google Calendar:
+A personal automation that sends two daily WhatsApp messages pulled from your Google Calendar:
 
 - **☀️ Morning message** — today's agenda, time-blocked and ready to go
 - **🌙 Evening message** — tomorrow's preview so you can plan ahead
 
-Built with Python, Flask, Google Calendar API, and Twilio. Deployed for free on Render.
+Built with Python and Flask. Scheduling handled by cron-job.org. Hosted for free on Render.
 
 ---
 
@@ -41,7 +41,9 @@ Tomorrow's agenda:
 |---|---|
 | Google Cloud project | Read your Google Calendar |
 | Twilio account | Send WhatsApp messages |
-| Render account | Host the bot 24/7 |
+| Render account | Host the app 24/7 |
+| cron-job.org account | Trigger messages at set times |
+| UptimeRobot account | Keep Render awake |
 
 ---
 
@@ -51,13 +53,44 @@ Tomorrow's agenda:
 2. Enable the **Google Calendar API**: APIs & Services → Library → search "Google Calendar API" → Enable
 3. Create OAuth credentials: APIs & Services → Credentials → Create Credentials → OAuth client ID
    - Application type: **Web application**
-   - Authorised redirect URI: `https://YOUR-APP-NAME.onrender.com/auth/callback` (fill in after Step 3)
+   - Authorised redirect URI: `https://YOUR-APP.onrender.com/auth/callback` (fill in after Step 2)
 4. Note your **Client ID** and **Client Secret**
 5. Under OAuth consent screen → add your Gmail as a **Test user**
 
 ---
 
-## Step 2 — Twilio sandbox setup
+## Step 2 — Deploy to Render
+
+1. Fork or clone this repo to your GitHub account
+2. Go to https://render.com → New → Web Service → connect your repo
+3. Settings:
+   - **Build command:** `pip install -r requirements.txt`
+   - **Start command:** `gunicorn app:app --workers 1`
+   - **Instance type:** Free
+4. Add these environment variables:
+
+```
+GOOGLE_CLIENT_ID        = your Google client ID
+GOOGLE_CLIENT_SECRET    = your Google client secret
+REDIRECT_URI            = https://YOUR-APP.onrender.com/auth/callback
+GOOGLE_TOKEN            = (leave empty — filled automatically after login)
+SELECTED_CALENDARS      = []
+TWILIO_ACCOUNT_SID      = your Twilio SID
+TWILIO_AUTH_TOKEN       = your Twilio auth token
+TWILIO_WHATSAPP_FROM    = whatsapp:+14155238886
+WHATSAPP_PHONE          = your number e.g. +5511999999999
+TIMEZONE                = America/Sao_Paulo
+RENDER_API_KEY          = your Render API key (Account Settings → API Keys)
+RENDER_SERVICE_ID       = your Render service ID (starts with srv-)
+FLASK_SECRET            = any random string
+```
+
+5. Deploy and copy your live URL
+6. Go back to Google Cloud and add the full callback URL to Authorised redirect URIs
+
+---
+
+## Step 3 — Twilio sandbox setup
 
 1. Create a free account at https://www.twilio.com
 2. Go to Messaging → Try it out → Send a WhatsApp message
@@ -66,48 +99,45 @@ Tomorrow's agenda:
 
 ---
 
-## Step 3 — Deploy to Render
-
-1. Push this repo to GitHub (keep it private if you prefer)
-2. Go to https://render.com → New → Web Service → connect your repo
-3. Settings:
-   - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn app:app`
-   - **Instance type:** Free
-4. Add these environment variables:
-
-```
-TWILIO_ACCOUNT_SID      = your Twilio SID
-TWILIO_AUTH_TOKEN       = your Twilio auth token
-TWILIO_WHATSAPP_FROM    = whatsapp:+14155238886
-GOOGLE_CLIENT_ID        = your Google client ID
-GOOGLE_CLIENT_SECRET    = your Google client secret
-REDIRECT_URI            = https://YOUR-APP-NAME.onrender.com/auth/callback
-TIMEZONE                = America/Sao_Paulo
-GOOGLE_TOKEN            = (leave empty — filled automatically after login)
-RENDER_API_KEY          = your Render API key (Account Settings → API Keys)
-RENDER_SERVICE_ID       = your Render service ID (starts with srv-)
-```
-
-5. Deploy and copy your live URL (e.g. `https://agenda-bot-xxxx.onrender.com`)
-6. Go back to Google Cloud and add the full callback URL to Authorised redirect URIs
-
----
-
 ## Step 4 — Connect and configure
 
 1. Open your Render URL in a browser
 2. Click **Connect Google Calendar** and authorise your account
 3. Tick which calendars to include
-4. Enter your WhatsApp number with country code (e.g. `+5511999999999`)
-5. Set your morning and evening send times
-6. Click **Preview** to check the messages, then **Send now** to test
+4. Enter your WhatsApp number and click Save
+
+---
+
+## Step 5 — Schedule with cron-job.org
+
+1. Create a free account at https://cron-job.org
+2. Create two cron jobs:
+
+**Morning message:**
+- URL: `https://YOUR-APP.onrender.com/cron/morning`
+- Schedule: your preferred morning time
+- Timezone: America/Sao_Paulo
+
+**Evening message:**
+- URL: `https://YOUR-APP.onrender.com/cron/evening`
+- Schedule: your preferred evening time
+- Timezone: America/Sao_Paulo
+
+---
+
+## Step 6 — Keep Render awake with UptimeRobot
+
+1. Create a free account at https://uptimerobot.com
+2. Add a new HTTP(s) monitor pointing to your Render URL
+3. Set interval to 5 minutes
+
+This prevents Render's free tier from sleeping, ensuring cron-job.org calls always get a fast response.
 
 ---
 
 ## Notes
 
-- The Google token is stored as a Render environment variable so it survives restarts
-- The `RENDER_API_KEY` and `RENDER_SERVICE_ID` are needed to persist the token automatically
+- The Google token and settings are stored as Render environment variables so they survive restarts
+- This app is designed for a single user
 - To upgrade from Twilio sandbox to a real WhatsApp number, follow Twilio's approval process (~$1/month)
-- This app is designed for a single user — the token and settings are shared across the deployment
+- The Twilio sandbox disconnects after 72 hours of inactivity — reconnect by sending the join message again
