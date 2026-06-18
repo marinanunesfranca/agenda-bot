@@ -301,10 +301,12 @@ def send_whatsapp(message):
 
 
 def send_morning():
+    print(">>> send_morning triggered by scheduler")
     send_whatsapp(build_morning_message())
 
 
 def send_evening():
+    print(">>> send_evening triggered by scheduler")
     send_whatsapp(build_evening_message())
 
 
