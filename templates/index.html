@@ -83,16 +83,9 @@
         <label>WhatsApp number (with country code)</label>
         <input type="tel" name="phone" placeholder="+55 11 99999-9999" value="{{ data.phone }}">
 
-        <label style="margin-top:1rem">Send times</label>
-        <div class="time-row">
-          <div>
-            <label style="margin-top:0;font-size:12px;color:#888">☀️ Morning (today)</label>
-            <input type="time" name="morning_time" value="{{ data.morning_time or '07:00' }}">
-          </div>
-          <div>
-            <label style="margin-top:0;font-size:12px;color:#888">🌙 Evening (tomorrow preview)</label>
-            <input type="time" name="evening_time" value="{{ data.evening_time or '18:00' }}">
-          </div>
+        <div style="margin-top:1rem;padding:10px 14px;background:#f9f9f9;border:1px solid #eee;border-radius:8px;font-size:13px;color:#666;line-height:1.6">
+          ☀️ Morning send: <strong>{{ data.morning_time }}</strong> &nbsp;·&nbsp; 🌙 Evening send: <strong>{{ data.evening_time }}</strong><br>
+          <span style="font-size:12px">To change send times, update <code>MORNING_TIME</code> and <code>EVENING_TIME</code> in Render environment variables.</span>
         </div>
 
         <div class="btn-row">
@@ -124,7 +117,7 @@
       <li><span class="check-num">1</span> Connect your Google Calendar above</li>
       <li><span class="check-num">2</span> Tick which calendars to include</li>
       <li><span class="check-num">3</span> Enter your WhatsApp number with country code (e.g. <strong>+55</strong> for Brazil)</li>
-      <li><span class="check-num">4</span> Set your morning and evening send times</li>
+      <li><span class="check-num">4</span> Set <code>MORNING_TIME</code> and <code>EVENING_TIME</code> in Render environment variables (e.g. <strong>07:00</strong> and <strong>18:00</strong>)</li>
       <li><span class="check-num">5</span> Activate Twilio sandbox: on WhatsApp send <strong>join &lt;sandbox-word&gt;</strong> to <strong>+1 415 523 8886</strong></li>
       <li><span class="check-num">6</span> Click Preview then Send now to test both messages</li>
     </ul>
