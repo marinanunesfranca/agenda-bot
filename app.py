@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 from apscheduler.schedulers.background import BackgroundScheduler
+from twilio.rest import Client
 
 import pytz
 from google.oauth2.credentials import Credentials
