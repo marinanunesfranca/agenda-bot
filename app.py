@@ -4,9 +4,7 @@ import random
 import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
-from apscheduler.schedulers.background import BackgroundScheduler
 from twilio.rest import Client
-
 import pytz
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -44,21 +42,16 @@ EVENING_OPENERS_LIGHT = [
 DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
-# --- Settings stored in Render env vars ---
+# --- Settings ---
 
 def load_data():
     return {
-        "morning_time": os.getenv("MORNING_TIME", ""),
-        "evening_time": os.getenv("EVENING_TIME", ""),
         "phone": os.getenv("WHATSAPP_PHONE", ""),
         "selected_calendars": json.loads(os.getenv("SELECTED_CALENDARS", "[]")),
     }
 
 
-def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
-    """Save all settings to Render environment variables."""
-    os.environ["MORNING_TIME"] = morning_time
-    os.environ["EVENING_TIME"] = evening_time
+def save_settings_to_render(phone, selected_calendars):
     os.environ["WHATSAPP_PHONE"] = phone
     os.environ["SELECTED_CALENDARS"] = json.dumps(selected_calendars)
 
@@ -73,7 +66,6 @@ def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
             headers={"Authorization": f"Bearer {render_api_key}"},
         )
         raw = res.json()
-        # Handle both formats: list of {key,value} or list of {cursor, envVar:{key,value}}
         env_vars = []
         for item in raw:
             if "envVar" in item:
@@ -82,8 +74,6 @@ def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
                 env_vars.append(item)
 
         updates = {
-            "MORNING_TIME": morning_time,
-            "EVENING_TIME": evening_time,
             "WHATSAPP_PHONE": phone,
             "SELECTED_CALENDARS": json.dumps(selected_calendars),
         }
@@ -96,12 +86,13 @@ def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
                 updated.append({"key": k, "value": ev["value"]})
         for key, value in updates.items():
             updated.append({"key": key, "value": value})
+
         requests.put(
             f"https://api.render.com/v1/services/{service_id}/env-vars",
             headers={"Authorization": f"Bearer {render_api_key}"},
             json=updated,
         )
-        print(f"Settings saved to Render: morning={morning_time}, evening={evening_time}")
+        print("Settings saved to Render.")
     except Exception as e:
         print(f"Could not save settings to Render: {e}")
 
@@ -185,10 +176,9 @@ def get_google_creds():
 def get_events_for_day(target_date):
     creds = get_google_creds()
     if not creds:
-        return [], {}
+        return []
 
-    data = load_data()
-    selected = data.get("selected_calendars", [])
+    selected = json.loads(os.getenv("SELECTED_CALENDARS", "[]"))
     tz = pytz.timezone(TIMEZONE)
     start = tz.localize(datetime.combine(target_date, datetime.min.time()))
     end = start + timedelta(days=1)
@@ -226,18 +216,16 @@ def get_events_for_day(target_date):
             })
 
     all_events.sort(key=lambda x: x["sort"])
-    return all_events, calendars
+    return all_events
 
 
 def format_event_list(events):
     lines = []
-    timed = [e for e in events if not e["all_day"]]
-    allday = [e for e in events if e["all_day"]]
-    if allday:
-        for e in allday:
+    for e in events:
+        if e["all_day"]:
             lines.append(f"📌 {e['summary']} _(all day)_")
-    for e in timed:
-        lines.append(f"• *{e['time']}* — {e['summary']}")
+        else:
+            lines.append(f"• *{e['time']}* — {e['summary']}")
     return lines
 
 
@@ -246,17 +234,12 @@ def build_morning_message():
     today = datetime.now(tz).date()
     day_label = DAYS_EN[today.weekday()]
     date_label = today.strftime("%d/%m")
-    events, _ = get_events_for_day(today)
+    events = get_events_for_day(today)
     timed = [e for e in events if not e["all_day"]]
     busy = len(timed) >= 4
     opener = random.choice(MORNING_OPENERS_BUSY if busy else MORNING_OPENERS_LIGHT)
-    lines = [
-        f"☀️ *Good morning! {day_label}, {date_label}*",
-        f"_{opener}_", "",
-        "*Today's agenda:*",
-    ]
-    event_lines = format_event_list(events)
-    lines += event_lines if event_lines else ["_Nothing scheduled — free day!_"]
+    lines = [f"☀️ *Good morning! {day_label}, {date_label}*", f"_{opener}_", "", "*Today's agenda:*"]
+    lines += format_event_list(events) or ["_Nothing scheduled — free day!_"]
     return "\n".join(lines)
 
 
@@ -265,17 +248,12 @@ def build_evening_message():
     tomorrow = datetime.now(tz).date() + timedelta(days=1)
     day_label = DAYS_EN[tomorrow.weekday()]
     date_label = tomorrow.strftime("%d/%m")
-    events, _ = get_events_for_day(tomorrow)
+    events = get_events_for_day(tomorrow)
     timed = [e for e in events if not e["all_day"]]
     busy = len(timed) >= 4
     opener = random.choice(EVENING_OPENERS_BUSY if busy else EVENING_OPENERS_LIGHT)
-    lines = [
-        f"🌙 *Tomorrow preview — {day_label}, {date_label}*",
-        f"_{opener}_", "",
-        "*Tomorrow's agenda:*",
-    ]
-    event_lines = format_event_list(events)
-    lines += event_lines if event_lines else ["_Nothing scheduled yet._"]
+    lines = [f"🌙 *Tomorrow preview — {day_label}, {date_label}*", f"_{opener}_", "", "*Tomorrow's agenda:*"]
+    lines += format_event_list(events) or ["_Nothing scheduled yet._"]
     return "\n".join(lines)
 
 
@@ -292,56 +270,24 @@ def send_whatsapp(message):
         return
     client = Client(sid, token)
     try:
-        msg = client.messages.create(
-            body=message, from_=from_num, to=f"whatsapp:{phone}",
-        )
+        msg = client.messages.create(body=message, from_=from_num, to=f"whatsapp:{phone}")
         print(f"Sent: {msg.sid}")
     except Exception as e:
         print(f"Twilio error: {e}")
 
 
-def send_morning():
-    print(">>> send_morning triggered by scheduler")
-    send_whatsapp(build_morning_message())
-
-
-def send_evening():
-    print(">>> send_evening triggered by scheduler")
-    send_whatsapp(build_evening_message())
-
+# --- Routes ---
 
 @app.route("/cron/morning")
 def cron_morning():
-    send_morning()
+    send_whatsapp(build_morning_message())
     return "ok"
 
 
 @app.route("/cron/evening")
 def cron_evening():
-    send_evening()
+    send_whatsapp(build_evening_message())
     return "ok"
-
-
-scheduler = BackgroundScheduler()
-scheduler.start()
-
-
-def reschedule(morning_time=None, evening_time=None):
-    tz = pytz.timezone(TIMEZONE)
-    morning_time = morning_time or os.getenv("MORNING_TIME", "")
-    evening_time = evening_time or os.getenv("EVENING_TIME", "")
-    scheduler.remove_all_jobs()
-    if morning_time:
-        mh, mm = map(int, morning_time.split(":"))
-        scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
-        print(f"Scheduled morning {morning_time} {TIMEZONE}")
-    if evening_time:
-        eh, em = map(int, evening_time.split(":"))
-        scheduler.add_job(send_evening, "cron", hour=eh, minute=em, timezone=tz, id="evening")
-        print(f"Scheduled evening {evening_time} {TIMEZONE}")
-
-
-reschedule()
 
 
 @app.route("/")
@@ -362,12 +308,9 @@ def index():
 
 @app.route("/save-settings", methods=["POST"])
 def save_settings():
-    morning_time = request.form.get("morning_time", "07:00").strip()
-    evening_time = request.form.get("evening_time", "18:00").strip()
     phone = request.form.get("phone", "").strip()
     selected_calendars = request.form.getlist("calendars")
-    save_data_to_render(morning_time, evening_time, phone, selected_calendars)
-    reschedule(morning_time, evening_time)
+    save_settings_to_render(phone, selected_calendars)
     return redirect(url_for("index"))
 
 
@@ -420,13 +363,13 @@ def preview_evening():
 
 @app.route("/send-now/morning", methods=["POST"])
 def send_now_morning():
-    send_morning()
+    send_whatsapp(build_morning_message())
     return jsonify({"status": "sent"})
 
 
 @app.route("/send-now/evening", methods=["POST"])
 def send_now_evening():
-    send_evening()
+    send_whatsapp(build_evening_message())
     return jsonify({"status": "sent"})
 
 
