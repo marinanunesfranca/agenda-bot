@@ -71,7 +71,15 @@ def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
             f"https://api.render.com/v1/services/{service_id}/env-vars",
             headers={"Authorization": f"Bearer {render_api_key}"},
         )
-        env_vars = res.json()
+        raw = res.json()
+        # Handle both formats: list of {key,value} or list of {cursor, envVar:{key,value}}
+        env_vars = []
+        for item in raw:
+            if "envVar" in item:
+                env_vars.append(item["envVar"])
+            elif "key" in item:
+                env_vars.append(item)
+
         updates = {
             "MORNING_TIME": morning_time,
             "EVENING_TIME": evening_time,
@@ -80,10 +88,11 @@ def save_data_to_render(morning_time, evening_time, phone, selected_calendars):
         }
         updated = []
         for ev in env_vars:
-            if ev["key"] in updates:
-                updated.append({"key": ev["key"], "value": updates.pop(ev["key"])})
+            k = ev["key"]
+            if k in updates:
+                updated.append({"key": k, "value": updates.pop(k)})
             else:
-                updated.append({"key": ev["key"], "value": ev["value"]})
+                updated.append({"key": k, "value": ev["value"]})
         for key, value in updates.items():
             updated.append({"key": key, "value": value})
         requests.put(
@@ -125,7 +134,13 @@ def save_token_to_render(creds):
             f"https://api.render.com/v1/services/{service_id}/env-vars",
             headers={"Authorization": f"Bearer {render_api_key}"},
         )
-        env_vars = res.json()
+        raw = res.json()
+        env_vars = []
+        for item in raw:
+            if "envVar" in item:
+                env_vars.append(item["envVar"])
+            elif "key" in item:
+                env_vars.append(item)
         updated = []
         found = False
         for ev in env_vars:
@@ -296,10 +311,10 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 
-def reschedule():
+def reschedule(morning_time=None, evening_time=None):
     tz = pytz.timezone(TIMEZONE)
-    morning_time = os.getenv("MORNING_TIME", "07:00")
-    evening_time = os.getenv("EVENING_TIME", "18:00")
+    morning_time = morning_time or os.getenv("MORNING_TIME", "07:00")
+    evening_time = evening_time or os.getenv("EVENING_TIME", "18:00")
     scheduler.remove_all_jobs()
     mh, mm = map(int, morning_time.split(":"))
     scheduler.add_job(send_morning, "cron", hour=mh, minute=mm, timezone=tz, id="morning")
@@ -334,7 +349,7 @@ def save_settings():
     phone = request.form.get("phone", "").strip()
     selected_calendars = request.form.getlist("calendars")
     save_data_to_render(morning_time, evening_time, phone, selected_calendars)
-    reschedule()
+    reschedule(morning_time, evening_time)
     return redirect(url_for("index"))
 
 
