@@ -318,9 +318,6 @@ def cron_evening():
     return "ok"
 
 
-reschedule()
-
-
 @app.route("/")
 def index():
     data = load_data()
